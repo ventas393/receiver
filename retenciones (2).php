@@ -146,39 +146,51 @@ if ($action == 'accounting_apply' && $user->admin) {
 
 $tipo_espejo = ($object->element == 'facture') ? 'venta' : 'compra';
 
-// 6. Lógica de Guardado en Tabla Espejo (POST)
+// 6. Lógica de Guardado en Tabla Espejo (POST) - AHORA CON INSERT O UPDATE
 if ($action == 'update' && ($user->admin || $user->rights->facture->creer)) {
     $tipo_espejo = ($object->element == 'facture') ? 'venta' : 'compra';
     
     $db->begin();
 
-    // 1. Limpieza y preparación de variables numéricas (CORREGIDO: 'float' en lugar de 'alpha')
+    // 1. Limpieza y preparación de variables numéricas
     $base_total     = (double) GETPOST('base_total', 'float');
     $val_retefuente = (double) GETPOST('val_retefuente', 'float');
     $val_reteiva    = (double) GETPOST('val_reteiva', 'float');
     $val_reteica    = (double) GETPOST('val_reteica', 'float');
 
-    // 2. Sentencia UPDATE (Solo afecta a las columnas de montos)
-    $sql = "UPDATE " . MAIN_DB_PREFIX . "autocontabilidad_fiscal_espejo";
-    $sql .= " SET base_total = " . (double)$base_total . ",";
-    $sql .= " val_retefuente = " . (double)$val_retefuente . ",";
-    $sql .= " val_reteiva = " . (double)$val_reteiva . ",";
-    $sql .= " val_reteica = " . (double)$val_reteica;
-    $sql .= " WHERE fk_facture = " . (int)$id . " AND tipo_factura = '" . $db->escape($tipo_espejo) . "'";
+    // 2. Sentencia INSERT ... ON DUPLICATE KEY UPDATE
+    // Utiliza la clave única idx_facture_tipo (fk_facture, tipo_factura)
+    $sql = "INSERT INTO " . MAIN_DB_PREFIX . "autocontabilidad_fiscal_espejo ";
+    $sql .= "(fk_facture, tipo_factura, base_total, val_retefuente, val_reteiva, val_reteica, date_creation) ";
+    $sql .= "VALUES (";
+    $sql .= (int)$id . ", ";
+    $sql .= "'" . $db->escape($tipo_espejo) . "', ";
+    $sql .= (double)$base_total . ", ";
+    $sql .= (double)$val_retefuente . ", ";
+    $sql .= (double)$val_reteiva . ", ";
+    $sql .= (double)$val_reteica . ", ";
+    $sql .= "NOW()";
+    $sql .= ") ";
+    $sql .= "ON DUPLICATE KEY UPDATE ";
+    $sql .= "base_total = VALUES(base_total), ";
+    $sql .= "val_retefuente = VALUES(val_retefuente), ";
+    $sql .= "val_reteiva = VALUES(val_reteiva), ";
+    $sql .= "val_reteica = VALUES(val_reteica)";
 
     $resql = $db->query($sql);
 
     if (!$resql) {
         $error_sql = $db->lasterror();
         $db->rollback();
-        setEventMessages("Error al actualizar valores fiscales: " . $error_sql, null, 'errors');
+        setEventMessages("Error al insertar/actualizar valores fiscales: " . $error_sql, null, 'errors');
     } else {
-        if ($db->affected_rows($resql) > 0) {
-            $db->commit();
-            setEventMessages("Valores fiscales actualizados correctamente.", null, 'mesgs');
+        $db->commit();
+        $affected = $db->affected_rows($resql);
+        
+        if ($affected > 0) {
+            setEventMessages("Valores fiscales guardados correctamente (INSERT/UPDATE).", null, 'mesgs');
         } else {
-            $db->commit(); 
-            setEventMessages("No se encontró registro previo para actualizar, o los valores son idénticos.", null, 'warnings');
+            setEventMessages("No se realizó cambio en los registros.", null, 'warnings');
         }
     }
 }
@@ -327,7 +339,7 @@ echo dol_get_fiche_head($head, 'retencionescol', "Retenciones", -1, $object->ele
 dol_banner_tab($object, 'ref', '', 1, 'ref');
 
 echo '<div class="fichecenter"><div class="underbanner clearboth"></div>';
-echo '<div class="info">porc: '.number_format($p_f, 4).' | nat:'.$nat.' | serv:'.$tiene_servicios.' | const:'.number_format(safe_config('AUTOCON_PERC_F_JURIDICA'), 2).' | Análisis: '.$tipo_espejo.' <b>'.($tiene_servicios?'Servicios':'Bienes').'</b></div>';
+echo '<div class="info">porc: '.number_format($p_f, 4).' | nat:'.$nat.' | serv:'.$tiene_servicios.' | const:'.number_format(safe_config('AUTOCON_PERC_F_JURIDICA'), 2).' | Análisis: '.$tipo_espejo.' <[...]
 
 echo '<form method="post" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
 echo '<input type="hidden" name="action" value="update"><input type="hidden" name="token" value="'.newToken().'">';
@@ -335,7 +347,7 @@ echo '<input type="hidden" name="action" value="update"><input type="hidden" nam
 echo '<table class="border centpercent"><thead><tr class="liste_titre"><td>Concepto Tributario</td><td>Base de Referencia</td><td>Valor Retención ($)</td></tr></thead><tbody>';
 echo '<tr><td>Base Imponible (Subtotal)</td><td>$ '.number_format($v_base, 2).'</td><td>-</td></tr>';
 echo '<tr><td>IVA de la Factura</td><td>$ '.number_format($v_tva, 2).'</td><td>-</td></tr>';
-echo '<tr class="oddeven"><td><b>ReteFuente</b></td><td><input type="text" size="8" name="base_total" value="'.number_format($v_base, 2).'"></td><td><input type="text" size="10" name="val_retefuente" value="'.number_format($s_fue, 2).'"></td></tr>';
+echo '<tr class="oddeven"><td><b>ReteFuente</b></td><td><input type="text" size="8" name="base_total" value="'.number_format($v_base, 2).'"></td><td><input type="text" size="10" name="val_retefuente" [...]
 echo '<tr class="oddeven"><td><b>ReteIVA</b></td><td>Calculado sobre valor IVA</td><td><input type="text" size="10" name="val_reteiva" value="'.number_format($s_iva, 2).'"></td></tr>';
 echo '<tr class="oddeven"><td><b>ReteICA</b></td><td>Afecta Base Imponible</td><td><input type="text" size="10" name="val_reteica" value="'.number_format($s_ica, 2).'"></td></tr>';
 
