@@ -211,16 +211,28 @@ $s_fue = 0;
 $s_iva = 0;
 $s_ica = 0;
 
-$uvt_val = (double)($conf->global->AUTOCON_VALOR_UVT ?: 47065);
+// Función auxiliar para obtener valor de configuración con default
+function safe_config($key, $default = 0) {
+    global $conf;
+    if (isset($conf->global->$key) && !empty($conf->global->$key)) {
+        return (double)$conf->global->$key;
+    }
+    return (double)$default;
+}
+
+$uvt_val = safe_config('AUTOCON_VALOR_UVT', 47065);
 $tope_min = $tiene_servicios ? 
-    ((double)($conf->global->AUTOCON_TOPE_SERVICIOS_UVT ?: 4)) * $uvt_val : 
-    ((double)($conf->global->AUTOCON_TOPE_COMPRAS_UVT ?: 27)) * $uvt_val;
+    (safe_config('AUTOCON_TOPE_SERVICIOS_UVT', 4) * $uvt_val) : 
+    (safe_config('AUTOCON_TOPE_COMPRAS_UVT', 27) * $uvt_val);
 
 if ($existing) {
+    // Si existe registro previo, usar esos valores
     $s_fue = (double)$existing->val_retefuente; 
     $s_iva = (double)$existing->val_reteiva; 
     $s_ica = (double)$existing->val_reteica;
+    $p_f = 0; // No se puede determinar el porcentaje exacto sin recalcular
 } else {
+    // SIEMPRE EJECUTAR EL CÁLCULO si no existe registro previo
     $reg_raw = isset($thirdparty->array_options['options_ei_type_liability_id']) ? 
         (int)$thirdparty->array_options['options_ei_type_liability_id'] : 0;
     $es_GC = ($reg_raw == 7);
@@ -238,51 +250,65 @@ if ($existing) {
         $thirdparty->array_options['options_puc_tipo_ica'] : null;
     $tar_ica = ($val_ica_raw !== null && $val_ica_raw !== '') ? (double)$val_ica_raw : 9.66;
 
+    // RETENCIÓN EN LA FUENTE
     if ($v_base >= $tope_min) {
         // --- PERSONA JURÍDICA ---
         if ($nat == 1) {
             if ($object->element == 'invoice_supplier') {
                 if ($es_NR) {
-                    $p_f = ($tiene_servicios) ? ((double)$conf->global->AUTOCON_PERC_S_JURIDICA / 100) : ((double)$conf->global->AUTOCON_PERC_F_JURIDICA / 100);
+                    $perc_s = safe_config('AUTOCON_PERC_S_JURIDICA', 0);
+                    $perc_f = safe_config('AUTOCON_PERC_F_JURIDICA', 0);
+                    $p_f = ($tiene_servicios) ? ($perc_s / 100) : ($perc_f / 100);
                     $s_fue = $v_base * $p_f;
                 }
                 if ($es_AUT) $s_fue = 0;
             } 
             elseif ($object->element == 'facture') {
-                $p_f = ($tiene_servicios) ? ((double)$conf->global->AUTOCON_PERC_S_JURIDICA / 100) : ((double)$conf->global->AUTOCON_PERC_F_JURIDICA / 100);
+                $perc_s = safe_config('AUTOCON_PERC_S_JURIDICA', 0);
+                $perc_f = safe_config('AUTOCON_PERC_F_JURIDICA', 0);
+                $p_f = ($tiene_servicios) ? ($perc_s / 100) : ($perc_f / 100);
                 $s_fue = $v_base * $p_f;
             }
         } 
         // --- PERSONA NATURAL ---
         elseif ($nat == 2) {
             if ($decl == 0) {
-                $p_f = ($tiene_servicios) ? ((double)$conf->global->AUTOCON_PERC_S_NATURAL / 100) : ((double)$conf->global->AUTOCON_PERC_F_NATURAL / 100);
+                $perc_s = safe_config('AUTOCON_PERC_S_NATURAL', 0);
+                $perc_f = safe_config('AUTOCON_PERC_F_NATURAL', 0);
+                $p_f = ($tiene_servicios) ? ($perc_s / 100) : ($perc_f / 100);
             } else {
-                $p_f = ($tiene_servicios) ? ((double)$conf->global->AUTOCON_PERC_S_NATURAL_DECL / 100) : ((double)$conf->global->AUTOCON_PERC_F_NATURAL_DECL / 100);
+                $perc_s = safe_config('AUTOCON_PERC_S_NATURAL_DECL', 0);
+                $perc_f = safe_config('AUTOCON_PERC_F_NATURAL_DECL', 0);
+                $p_f = ($tiene_servicios) ? ($perc_s / 100) : ($perc_f / 100);
             }
             $s_fue = $v_base * $p_f;
         }
 
         if (isset($thirdparty->array_options['options_arrendador']) && $thirdparty->array_options['options_arrendador'] == 1) {
-            $p_f = ($tiene_servicios) ? ((double)$conf->global->PORC_RETE_ARENDAMIENTOS / 100) : 0.035;
+            $perc = safe_config('PORC_RETE_ARENDAMIENTOS', 0);
+            $p_f = ($tiene_servicios) ? ($perc / 100) : 0.035;
             $s_fue = $v_base * $p_f;
         }
 
         if (isset($thirdparty->array_options['options_percibe_honorarios_o_comisiones']) && 
             $thirdparty->array_options['options_percibe_honorarios_o_comisiones'] == 1 && 
             $object->element == 'invoice_supplier') {
-            $p_f = ($tiene_servicios) ? ((double)$conf->global->AUTOCON_PERC_H_JURIDICA / 100) : 0.11;
+            $perc = safe_config('AUTOCON_PERC_H_JURIDICA', 0);
+            $p_f = ($tiene_servicios) ? ($perc / 100) : 0.11;
             $s_fue = $v_base * $p_f;
         }
     }
 
+    // RETENCIÓN EN EL IVA
     if ($v_base >= $tope_min) {
         if (($object->element == 'facture' && ($es_GC || $es_reteiva)) || ($object->element == 'invoice_supplier' && $es_RS)) {
-            $s_iva = $v_tva * ((double)$conf->global->AUTOCON_PERC_RETEIVA / 100);
+            $perc_reteiva = safe_config('AUTOCON_PERC_RETEIVA', 0);
+            $s_iva = $v_tva * ($perc_reteiva / 100);
         }
     }
 
-    $tope_min_ica = ((double)($conf->global->AUTOCON_TOPE_ICA_UVT ?: 7)) * $uvt_val;
+    // RETENCIÓN EN EL ICA
+    $tope_min_ica = safe_config('AUTOCON_TOPE_ICA_UVT', 7) * $uvt_val;
     if ($v_base >= $tope_min_ica) {
         $s_ica = $v_base * ($tar_ica / 1000);
     }
@@ -301,7 +327,7 @@ echo dol_get_fiche_head($head, 'retencionescol', "Retenciones", -1, $object->ele
 dol_banner_tab($object, 'ref', '', 1, 'ref');
 
 echo '<div class="fichecenter"><div class="underbanner clearboth"></div>';
-echo '<div class="info">porc: '.number_format($p_f, 4).' | nat:'.$nat.' | serv:'.$tiene_servicios.' | const:'.number_format($conf->global->AUTOCON_PERC_F_JURIDICA, 2).' | Análisis: '.$tipo_espejo.' <b>'.($tiene_servicios?'Servicios':'Bienes').'</b></div>';
+echo '<div class="info">porc: '.number_format($p_f, 4).' | nat:'.$nat.' | serv:'.$tiene_servicios.' | const:'.number_format(safe_config('AUTOCON_PERC_F_JURIDICA'), 2).' | Análisis: '.$tipo_espejo.' <b>'.($tiene_servicios?'Servicios':'Bienes').'</b></div>';
 
 echo '<form method="post" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
 echo '<input type="hidden" name="action" value="update"><input type="hidden" name="token" value="'.newToken().'">';
