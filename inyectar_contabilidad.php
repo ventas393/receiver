@@ -26,7 +26,8 @@ if ($id_periodo > 0) {
         // 2. Consulta Maestra (INNER JOIN para empleados en el periodo, LEFT JOIN para extrafields)
         $sql_d = "SELECT d.*, s.nom as emp_nom, s.siren as nit, s.rowid as socid,
                   ex.nominaofinova_cta_gas, ex.nominaofinova_cta_pas, 
-                  ex.nominaofinova_cta_ant, ex.nominaofinova_eps, ex.nominaofinova_afp, ex.nominaofinova_arl
+                  ex.nominaofinova_cta_ant, ex.nominaofinova_eps, ex.nominaofinova_afp, ex.nominaofinova_arl, ex.nominaofinova_caja, ex.nominaofinova_cta_gas_caja, ex.nominaofinova_cta_pas_caja,
+
                   FROM llxu3_ofinova_nom_detalles as d
                   INNER JOIN ".MAIN_DB_PREFIX."societe as s ON d.fk_soc = s.rowid
                   LEFT JOIN ".MAIN_DB_PREFIX."societe_extrafields as ex ON d.fk_soc = ex.fk_object
@@ -38,6 +39,15 @@ if ($id_periodo > 0) {
         while ($linea = $db->fetch_object($res_d)) {
             $asiento = array();
             $nit_c = str_replace(array(' ', '-', '.'), '', $linea->nit); // NIT limpio para concatenar
+            $nit_caja = ''; 
+            $nom_caja = 'Caja de Compensación';
+            if ($linea->nominaofinova_caja > 0) {
+                $res_c = $db->query("SELECT siren, nom FROM ".MAIN_DB_PREFIX."societe WHERE rowid = ".$linea->nominaofinova_caja);
+                $obj_c = $db->fetch_object($res_c);
+                $nit_caja = str_replace(array(' ', '-', '.'), '', $obj_c->siren);
+                $nom_caja = $obj_c->nom;
+            }
+
 
             // Función para mapear: numero_compte (Padre) y subledger_account (Cuenta+NIT)
             $map = function($cta_base, $defecto, $nit) {
@@ -97,11 +107,21 @@ if ($id_periodo > 0) {
                 $asiento[] = array('pc'=>'510570', 'sc'=>'510570'.$nit_c, 'd'=>$linea->val_pension_patronal, 'h'=>0, 'nom'=>$linea->emp_nom, 'nit'=>$linea->nit);
                 $asiento[] = array('pc'=>'238030', 'sc'=>'238030', 'd'=>0, 'h'=>$linea->val_pension_patronal, 'nom'=>'AFP Patronal', 'nit'=>'');
             }
-
+            
             if ($linea->val_caja_comp > 0) {
+                // Gasto con NIT empleado
+                $m_gas = $map($linea->nominaofinova_cta_gas_caja, '510572', $nit_c);
+                $asiento[] = array('pc'=>$m_gas['pc'], 'sc'=>$m_gas['sc'], 'd'=>$linea->val_caja_comp, 'h'=>0, 'nom'=>$linea->emp_nom, 'nit'=>$linea->nit);
+                // Pasivo con NIT Caja
+                $m_pas = $map($linea->nominaofinova_cta_pas_caja, '237005', $nit_caja);
+                $asiento[] = array('pc'=>$m_pas['pc'], 'sc'=>$m_pas['sc'], 'd'=>0, 'h'=>$linea->val_caja_comp, 'nom'=>$nom_caja, 'nit'=>$nit_caja);
+            }
+
+
+            /*if ($linea->val_caja_comp > 0) {
                 $asiento[] = array('pc'=>'510572', 'sc'=>'510572'.$nit_c, 'd'=>$linea->val_caja_comp, 'h'=>0, 'nom'=>$linea->emp_nom, 'nit'=>$linea->nit);
                 $asiento[] = array('pc'=>'237010', 'sc'=>'237010', 'd'=>0, 'h'=>$linea->val_caja_comp, 'nom'=>'Caja Compensacion', 'nit'=>'');
-            }
+            }*/
 
             // --- D. VACACIONES DISFRUTADAS (Limpia el pasivo si hubo pago este mes) ---
             if ($linea->val_vacaciones_pagadas > 0) {
