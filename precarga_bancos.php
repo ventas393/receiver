@@ -44,8 +44,9 @@ if (GETPOST('button_removefilter', 'alpha')) {
     $search_account = 0;
 } else {
     // Filtro de referencia/detalle
-    if (GETPOST('search_ref', 'alpha') !== '') {
-        $search_ref = GETPOST('search_ref', 'alpha');
+    $ref_post = GETPOST('search_ref', 'alpha');
+    if ($ref_post) {
+        $search_ref = $ref_post;
         $_SESSION[$contextpage]['search_ref'] = $search_ref;
     } elseif (isset($_SESSION[$contextpage]['search_ref'])) {
         $search_ref = $_SESSION[$contextpage]['search_ref'];
@@ -127,7 +128,7 @@ llxHeader('', $langs->trans("Precarga Bancaria (Colombia)"));
 $accountstatic = new Account($db);
 
 // Barra de título nativa con paginador integrado
-print_barre_liste($langs->trans("Transacciones de Caja y Bancos por Asentar (Colombia)"), $page, $_SERVER["PHP_SELF"], '&search_ref='.urlencode($search_ref).'&search_account='.$search_account, $sortfield, $sortorder, '', $total_documentos, $total_documentos);
+print_barre_liste($langs->trans("Transacciones de Caja y Bancos por Asentar (Colombia)"), $page, $_SERVER["PHP_SELF"], '&search_ref='.urlencode($search_ref).'&search_account='.$search_account, $sortfield, $sortorder, '', -1, $total_documentos);
 
 // =========================================================================
 // BARRA DE FILTRADO SUPERIOR TIPO CARD ALINEADA (SOLUCIÓN DEFINITIVA)
@@ -167,7 +168,7 @@ echo '<input type="hidden" name="sortorder" value="'.htmlspecialchars($sortorder
 
 echo '<table class="noborder centpercent">';
 echo '<tr class="liste_titre">';
-echo '<td width="30" class="center"><input type="checkbox" id="checkall" onclick="var checkboxes = document.getElementsByName(\'movimientos[]\'); for(var i=0; i<checkboxes.length; i++) { checkboxes[i].checked = document.getElementById(\'checkall\').checked; }"></td>';
+echo '<td width="30" class="center"><input type="checkbox" id="checkall" onclick="var checkboxes = document.getElementsByName(\'movimientos[]\'); for(var i=0; i<checkboxes.length; i++) { checkboxes[i].checked = this.checked; }"></td>';
 echo '<td>Ref. Transacción / Detalle</td>';
 echo '<td>Cuenta Financiera (Origen)</td>';
 echo '<td>Fecha Valor</td>';
