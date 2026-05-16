@@ -81,24 +81,31 @@ llxHeader('', $langs->trans("Precarga Contable Colombia"));
 $socstatic = new Societe($db);
 
 // =========================================================================
-// 3. CONSTRUCCIÓN DE LA CONSULTA SQL SEGURA Y OPTIMIZADA
+// 3. CONSULTA SQL HÍBRIDA: COMERCIALES DIAN + ANTICIPOS (SEGURA Y OPTIMIZADA)
 // =========================================================================
+// 🧠 REGLA FISCAL HÍBRIDA:
+// - Facturas comerciales (type=0): EXIGEN éxito en API DIAN (status_response = 1)
+// - Facturas de anticipo (type=3): PERMITEN acceso libre (sin requerir DIAN)
+// - Notas Crédito (type=2): EXIGEN éxito en API DIAN (status_response = 1)
+// =========================================================================
+
 $sql = "SELECT f.rowid as facid, f.ref, f.datef, f.total_ht, f.total_tva, f.total_ttc, f.type as factype, ";
 $sql .= " s.rowid as socid, s.nom as name, s.siren as nit_tercero, s.code_compta, ef.co_contabilizado, ";
-$sql .= " MAX(el.json_response) as json_response ";
+$sql .= " MAX(el.json_response) as json_response, MAX(el.status_response) as status_response ";
 $sql .= " FROM " . MAIN_DB_PREFIX . "facture as f ";
 $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "societe as s ON f.fk_soc = s.rowid ";
 $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture_extrafields as ef ON f.rowid = ef.fk_object ";
-// Forzamos el cruce únicamente si la factura fue aprobada de forma exitosa ante la DIAN (status_response = 1)
-$sql .= " INNER JOIN " . MAIN_DB_PREFIX . "electronicinvoice_apilog as el ON f.rowid = el.invoice_id AND el.status_response = 1 ";
+// LEFT JOIN para permitir anticipos sin DIAN, pero con agregación segura
+$sql .= " LEFT JOIN " . MAIN_DB_PREFIX . "electronicinvoice_apilog as el ON f.rowid = el.invoice_id ";
 $sql .= " WHERE f.fk_statut IN (1, 2) ";
 $sql .= " AND (ef.co_contabilizado IS NULL OR ef.co_contabilizado = 0) ";
 
-// FILTROS SEGURA EN SQL (NO en PHP después de fetch)
-// Validar que factype != 3 O exista CUFE en json_response
-// NOTA: Este filtro se mantiene en PHP porque requiere JSON parsing
-// pero se optimiza moviendo el filtro de search_ref_dian a SQL cuando sea posible
+// 🧠 REGLA FISCAL HÍBRIDA SEGURA: 
+// Exigimos éxito en el API si es factura comercial (type=0 o type=2) O 
+// permitimos el acceso libre si es Anticipo (type=3)
+$sql .= " AND ( (f.type IN (0, 2) AND el.status_response = 1) OR f.type = 3 ) ";
 
+// Filtros de búsqueda
 if (!empty($search_ref)) {
     $sql .= " AND f.ref LIKE '%" . $db->escape($search_ref) . "%'";
 }
@@ -111,17 +118,17 @@ if ($search_tipo > 0) {
     if ($search_tipo == 3) $sql .= " AND f.type = 3";
 }
 
-// Grupo por factura (usando MAX para json_response que puede variar)
+// Agrupamos estrictamente para triturar los reintentos de logs y dejar una sola fila limpia por documento
 $sql .= " GROUP BY f.rowid, f.ref, f.datef, f.total_ht, f.total_tva, f.total_ttc, f.type, s.rowid, s.nom, s.siren, s.code_compta, ef.co_contabilizado ";
 
-// Aplicar ORDER BY y LIMIT al COUNT query para obtener paginación correcta
-// Se hace en dos pasos: primero COUNT, luego con LIMIT
+// ============= QUERY COUNT SEPARADO (con misma lógica) =============
 $sql_count = "SELECT COUNT(DISTINCT f.rowid) as total FROM " . MAIN_DB_PREFIX . "facture as f ";
 $sql_count .= " INNER JOIN " . MAIN_DB_PREFIX . "societe as s ON f.fk_soc = s.rowid ";
 $sql_count .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture_extrafields as ef ON f.rowid = ef.fk_object ";
-$sql_count .= " INNER JOIN " . MAIN_DB_PREFIX . "electronicinvoice_apilog as el ON f.rowid = el.invoice_id AND el.status_response = 1 ";
+$sql_count .= " LEFT JOIN " . MAIN_DB_PREFIX . "electronicinvoice_apilog as el ON f.rowid = el.invoice_id ";
 $sql_count .= " WHERE f.fk_statut IN (1, 2) ";
 $sql_count .= " AND (ef.co_contabilizado IS NULL OR ef.co_contabilizado = 0) ";
+$sql_count .= " AND ( (f.type IN (0, 2) AND el.status_response = 1) OR f.type = 3 ) ";
 
 if (!empty($search_ref)) {
     $sql_count .= " AND f.ref LIKE '%" . $db->escape($search_ref) . "%'";
@@ -135,7 +142,7 @@ if ($search_tipo > 0) {
     if ($search_tipo == 3) $sql_count .= " AND f.type = 3";
 }
 
-// Ejecutar COUNT para obtener el total ANTES de filtros PHP
+// Ejecutar COUNT para obtener el total
 $resql_count = $db->query($sql_count);
 $total_documentos_sin_filtro = 0;
 if ($resql_count) {
@@ -169,7 +176,9 @@ if ($resql) {
             }
         }
 
-        // REGLA FISCAL COLOMBIANA: Excluir de la lista ventas o notas comerciales que no tengan CUFE aprobado
+        // REGLA FISCAL COLOMBIANA: 
+        // - Excluir comerciales sin CUFE
+        // - Permitir anticipos sin CUFE (no requieren DIAN)
         if ($obj->factype != 3 && empty($cufe_detectado)) {
             continue; 
         }
