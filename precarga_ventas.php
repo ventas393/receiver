@@ -15,56 +15,77 @@ if (!$user->rights->facture->lire) {
 // Cargar diccionarios de traducciones contables
 $langs->loadLangs(array("bills", "main", "accounting", "companies"));
 
-// 2. CAPTURA NATIVA DE PARÁMETROS DE ORDENACIÓN, PAGINACIÓN Y LÍMITES (Filtro 'alpha' corregido)
-$sortfield = GETPOST('sortfield', 'alpha') ? GETPOST('sortfield', 'alpha') : 'f.datef';
-$sortorder = GETPOST('sortorder', 'alpha') ? GETPOST('sortorder', 'alpha') : 'DESC';
-$page = GETPOSTINT('page') > 0 ? GETPOSTINT('page') : 0;
+// =========================================================================
+// 2. CAPTURA NATIVA DE PARÁMETROS CON VALIDACIÓN ESTRICTA
+// =========================================================================
+
+// VALIDACIÓN SEGURA: sortfield - WHITELIST de campos permitidos
+$allowed_sortfields = array('f.datef', 'f.ref', 'f.total_ttc', 's.nom', 'f.type');
+$sortfield = GETPOST('sortfield', 'alpha');
+$sortfield = (in_array($sortfield, $allowed_sortfields, true)) ? $sortfield : 'f.datef';
+
+// VALIDACIÓN SEGURA: sortorder - Solo ASC o DESC
+$sortorder = strtoupper(GETPOST('sortorder', 'alpha'));
+$sortorder = ($sortorder === 'ASC') ? 'ASC' : 'DESC';
+
+// Paginación
+$page = max(0, GETPOSTINT('page'));
 $limit = GETPOSTINT('limit') > 0 ? GETPOSTINT('limit') : $conf->liste_limit;
+$offset = $limit * $page;
 
-// Inicializar la matriz de filtros nativa para la barra de herramientas
-$search_array = array();
+// Inicializar la matriz de filtros con validación de sesión
+if (!isset($_SESSION[$contextpage])) {
+    $_SESSION[$contextpage] = array();
+}
 
-// Mapeo e interceptación dinámica de filtros con persistencia estricta en $_SESSION
+// VALIDACIÓN SEGURA: Filtros de búsqueda con persistencia en sesión
 $search_fields = array('search_ref', 'search_ref_dian', 'search_tercero', 'search_tipo', 'search_account');
+$search_params = array();
+
 foreach ($search_fields as $field) {
-    if (GETPOST($field, 'alpha') !== '') {
-        ${$field} = GETPOST($field, 'alpha');
-        $_SESSION[$contextpage][$field] = ${$field};
+    $post_value = GETPOST($field, 'alpha');
+    
+    if ($post_value !== '') {
+        // Valor POST tiene prioridad
+        $search_params[$field] = $post_value;
+        $_SESSION[$contextpage][$field] = $post_value;
     } elseif (GETPOST('button_search', 'alpha') || GETPOST('button_removefilter', 'alpha')) {
-        ${$field} = '';
+        // Botón de reset/search presionado - limpiar
+        $search_params[$field] = '';
         unset($_SESSION[$contextpage][$field]);
-    } elseif (!empty($_SESSION[$contextpage][$field])) {
-        ${$field} = $_SESSION[$contextpage][$field];
     } else {
-        ${$field} = '';
+        // Usar valor de sesión si existe
+        $search_params[$field] = $_SESSION[$contextpage][$field] ?? '';
     }
-    $search_array[$field] = ${$field};
 }
 
 // Acción del botón de la papelera: Destruir de forma atómica los filtros de sesión
 if (GETPOST('button_removefilter', 'alpha')) {
-    foreach ($search_array as $key => $val) {
-        unset($_SESSION[$contextpage][$key]);
-        $search_array[$key] = '';
+    foreach ($search_fields as $field) {
+        unset($_SESSION[$contextpage][$field]);
+        $search_params[$field] = '';
     }
-    $search_ref = ''; $search_ref_dian = ''; $search_tercero = ''; $search_tipo = ''; $search_account = '';
 }
 
-$offset = $limit * $page;
+// Extraer variables de búsqueda para uso en template
+$search_ref = $search_params['search_ref'] ?? '';
+$search_ref_dian = $search_params['search_ref_dian'] ?? '';
+$search_tercero = $search_params['search_tercero'] ?? '';
+$search_tipo = intval($search_params['search_tipo'] ?? 0);
+$search_account = $search_params['search_account'] ?? '';
 
 // --- A PARTIR DE AQUÍ SE INVOCAN LAS CONSULTAS SQL Y LUEGO EL llxHeader() ---
-
 
 llxHeader('', $langs->trans("Precarga Contable Colombia"));
 
 $socstatic = new Societe($db);
 
 // =========================================================================
-// 🚀 3. CONSTRUCCIÓN DE LA CONSULTA SQL PURIFICADA (FILTRO API DIAN ÉXITO)
+// 3. CONSTRUCCIÓN DE LA CONSULTA SQL SEGURA Y OPTIMIZADA
 // =========================================================================
 $sql = "SELECT f.rowid as facid, f.ref, f.datef, f.total_ht, f.total_tva, f.total_ttc, f.type as factype, ";
 $sql .= " s.rowid as socid, s.nom as name, s.siren as nit_tercero, s.code_compta, ef.co_contabilizado, ";
-$sql .= " el.json_response ";
+$sql .= " MAX(el.json_response) as json_response ";
 $sql .= " FROM " . MAIN_DB_PREFIX . "facture as f ";
 $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "societe as s ON f.fk_soc = s.rowid ";
 $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture_extrafields as ef ON f.rowid = ef.fk_object ";
@@ -73,8 +94,10 @@ $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "electronicinvoice_apilog as el ON f.r
 $sql .= " WHERE f.fk_statut IN (1, 2) ";
 $sql .= " AND (ef.co_contabilizado IS NULL OR ef.co_contabilizado = 0) ";
 
-// Agrupamos estrictamente por la cabecera para triturar cualquier duplicidad residual en el búfer
-$sql .= " GROUP BY f.rowid, f.ref, f.datef, f.total_ht, f.total_tva, f.total_ttc, f.type, s.rowid, s.nom, s.siren, s.code_compta, ef.co_contabilizado, el.json_response ";
+// FILTROS SEGURA EN SQL (NO en PHP después de fetch)
+// Validar que factype != 3 O exista CUFE en json_response
+// NOTA: Este filtro se mantiene en PHP porque requiere JSON parsing
+// pero se optimiza moviendo el filtro de search_ref_dian a SQL cuando sea posible
 
 if (!empty($search_ref)) {
     $sql .= " AND f.ref LIKE '%" . $db->escape($search_ref) . "%'";
@@ -88,7 +111,41 @@ if ($search_tipo > 0) {
     if ($search_tipo == 3) $sql .= " AND f.type = 3";
 }
 
+// Grupo por factura (usando MAX para json_response que puede variar)
+$sql .= " GROUP BY f.rowid, f.ref, f.datef, f.total_ht, f.total_tva, f.total_ttc, f.type, s.rowid, s.nom, s.siren, s.code_compta, ef.co_contabilizado ";
+
+// Aplicar ORDER BY y LIMIT al COUNT query para obtener paginación correcta
+// Se hace en dos pasos: primero COUNT, luego con LIMIT
+$sql_count = "SELECT COUNT(DISTINCT f.rowid) as total FROM " . MAIN_DB_PREFIX . "facture as f ";
+$sql_count .= " INNER JOIN " . MAIN_DB_PREFIX . "societe as s ON f.fk_soc = s.rowid ";
+$sql_count .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture_extrafields as ef ON f.rowid = ef.fk_object ";
+$sql_count .= " INNER JOIN " . MAIN_DB_PREFIX . "electronicinvoice_apilog as el ON f.rowid = el.invoice_id AND el.status_response = 1 ";
+$sql_count .= " WHERE f.fk_statut IN (1, 2) ";
+$sql_count .= " AND (ef.co_contabilizado IS NULL OR ef.co_contabilizado = 0) ";
+
+if (!empty($search_ref)) {
+    $sql_count .= " AND f.ref LIKE '%" . $db->escape($search_ref) . "%'";
+}
+if (!empty($search_tercero)) {
+    $sql_count .= " AND (s.nom LIKE '%" . $db->escape($search_tercero) . "%' OR s.siren LIKE '%" . $db->escape($search_tercero) . "%')";
+}
+if ($search_tipo > 0) {
+    if ($search_tipo == 1) $sql_count .= " AND f.type = 0";
+    if ($search_tipo == 2) $sql_count .= " AND f.type = 2";
+    if ($search_tipo == 3) $sql_count .= " AND f.type = 3";
+}
+
+// Ejecutar COUNT para obtener el total ANTES de filtros PHP
+$resql_count = $db->query($sql_count);
+$total_documentos_sin_filtro = 0;
+if ($resql_count) {
+    $obj_count = $db->fetch_object($resql_count);
+    $total_documentos_sin_filtro = intval($obj_count->total);
+}
+
+// Añadir ORDER BY y LIMIT (seguro porque sortfield fue validado)
 $sql .= " ORDER BY " . $sortfield . " " . $sortorder;
+$sql .= " LIMIT " . intval($offset) . ", " . intval($limit);
 
 $resql = $db->query($sql);
 
@@ -117,6 +174,7 @@ if ($resql) {
             continue; 
         }
 
+        // FILTRO search_ref_dian - Se mantiene en PHP porque requiere string matching post-procesamiento
         if (!empty($search_ref_dian) && stripos($clean_ref_electronica, $search_ref_dian) === false) {
             continue;
         }
@@ -129,8 +187,8 @@ if ($resql) {
     $total_documentos = count($filas_validas_html);
 
     // 4. BARRA DE HERRAMIENTAS Y PAGINACIÓN NATIVA
-    $param = '&search_ref=' . urlencode($search_ref) . '&search_ref_dian=' . urlencode($search_ref_dian) . '&search_tercero=' . urlencode($search_tercero) . '&search_tipo=' . $search_tipo;
-    print_barre_liste($langs->trans("Documentos de Ventas Pendientes por Asentar (Colombia)"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, '', $total_documentos, $limit, 'title_accountancy');
+    $param = '&search_ref=' . urlencode($search_ref) . '&search_ref_dian=' . urlencode($search_ref_dian) . '&search_tercero=' . urlencode($search_tercero) . '&search_tipo=' . intval($search_tipo);
+    print_barre_liste($langs->trans("Documentos de Ventas Pendientes por Asentar (Colombia)"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, '', $total_documentos_sin_filtro, $limit, 'title_accoun');
 
     // 5. UNIFICACIÓN: UN SOLO FORMULARIO QUE ENVUELVE A LA TABLA GENERAL
     echo '<form method="POST" id="main_form_col" action="procesar_asiento.php">';
@@ -138,7 +196,7 @@ if ($resql) {
 
     echo '<table class="noborder centpercent">';
     
-    // FILA DE FILTRADO (Uso de htmlspecialchars estándar PHP para evitar Fatal Errors)
+    // FILA DE FILTRADO
     echo '<tr class="liste_titre_filter">';
     echo '<td></td>'; 
     echo '<td><input type="text" class="flat" name="search_ref" size="8" value="'.htmlspecialchars($search_ref, ENT_QUOTES, 'UTF-8').'"></td>';
@@ -155,9 +213,10 @@ if ($resql) {
     
     echo '<td colspan="3"></td>'; 
     
-    // Botones de acción del filtro (Sanitizados de forma segura)
+    // Botones de acción del filtro (Sanitizados)
     echo '<td class="center">';
-    echo '<input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Search"), ENT_QUOTES, 'UTF-8').'" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'GET\'; f.action=\''.$_SERVER["PHP_SELF"].'\';">';
+    echo '<input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Search"), ENT_QUOTES, 'UTF-8').'" name="button_search" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'GET\'; return true;">';
+    echo ' <input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Reset"), ENT_QUOTES, 'UTF-8').'" name="button_removefilter" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'GET\'; return true;">';
     echo ' <a href="'.$_SERVER["PHP_SELF"].'" class="button">'.htmlspecialchars($langs->trans("Refresh"), ENT_QUOTES, 'UTF-8').'</a>';
     echo '</td>';
     echo '</tr>';
@@ -178,44 +237,49 @@ if ($resql) {
 
     // 6. RENDERIZACIÓN DE LAS FILAS
     if ($total_documentos > 0) {
-        $lote_paginado = array_slice($filas_validas_html, $offset, $limit);
-
-        foreach ($lote_paginado as $obj) {
-            $socstatic->id = $obj->socid;
-            $socstatic->name = $obj->name;
+        foreach ($filas_validas_html as $obj) {
+            $socstatic->id = intval($obj->socid);
+            $socstatic->name = htmlspecialchars($obj->name, ENT_QUOTES, 'UTF-8');
 
             if ($obj->factype == 3) {
                 $ref_electronica = '<span class="opacitymedium"><small>No requiere (Interno)</small></span>';
                 $tipo_doc = "Factura de Anticipo (IVA 0%)";
                 $simulacion_puc = '<small style="color: #ffc107; font-weight: bold;">Debita: 130505 (Cartera)<br>Crédita: 280505 (Anticipo Pasivo)<br>IVA: $0.00 (Exento)</small>';
             } else {
-                $ref_electronica = '<span class="badge badge-dot" style="background-color: #d4edda; color: #155724; padding: 4px 8px; border-radius: 4px; font-weight: bold;">' . $obj->clean_ref_dian . '</span>';
+                // SEGURIDAD: Escapar clean_ref_dian para evitar XSS
+                $ref_electronica = '<span class="badge badge-dot" style="background-color: #d4edda; color: #155724; padding: 4px 8px; border-radius: 4px; font-weight: bold;">' 
+                    . htmlspecialchars($obj->clean_ref_dian, ENT_QUOTES, 'UTF-8') . '</span>';
                 $tipo_doc = ($obj->factype == 2) ? "Nota Crédito (NC-CLI)" : "Factura Venta (VENT)";
                 $simulacion_puc = ($obj->factype == 2) 
                     ? '<small style="color: #dc3545;">Debita: 417505 (Devolución)<br>Debita: 240810 (IVA Reversado)<br>Crédita: 130505 (Cartera)</small>'
                     : '<small style="color: #28a745;">Debita: 130505 (Cartera)<br>Crédita: 4135xx (Ingreso)<br>Crédita: 240805 (IVA Ventas)</small>';
             }
 
+            // SEGURIDAD: Validar facid como integer y escapar valores en atributos HTML
+            $facid_safe = intval($obj->facid);
+            $ref_safe = htmlspecialchars($obj->ref, ENT_QUOTES, 'UTF-8');
+            $nit_safe = htmlspecialchars($obj->nit_tercero ?? '', ENT_QUOTES, 'UTF-8');
+
             echo '<tr class="oddeven">';
-            echo '<td><input type="checkbox" name="facturas[]" value="'.$obj->facid.'"></td>';
-            echo '<td><a href="'.DOL_URL_ROOT.'/compta/facture/card.php?id='.$obj->facid.'">'.img_object('', 'bill').' '.$obj->ref.'</a></td>';
-            echo '<td>'.$ref_electronica.'</td>';
-            echo '<td>'.dol_print_date($db->jdate($obj->datef), 'day').'</td>';
+            echo '<td><input type="checkbox" name="facturas[]" value="' . $facid_safe . '"></td>';
+            echo '<td><a href="' . DOL_URL_ROOT . '/compta/facture/card.php?id=' . $facid_safe . '">'.img_object('', 'bill').' ' . $ref_safe . '</a></td>';
+            echo '<td>' . $ref_electronica . '</td>';
+            echo '<td>' . dol_print_date($db->jdate($obj->datef), 'day') . '</td>';
             echo '<td>';
             echo $socstatic->getNomUrl(1); 
-            echo '<br><span class="opacitymedium sizeonlytext"><small><strong>NIT:</strong> '.(!empty($obj->nit_tercero) ? $obj->nit_tercero : $langs->trans("NoRegistered")).'</small></span>';
+            echo '<br><span class="opacitymedium sizeonlytext"><small><strong>NIT:</strong> ' . (!empty($nit_safe) ? $nit_safe : htmlspecialchars($langs->trans("NoRegistered"), ENT_QUOTES, 'UTF-8')) . '</small></span>';
             echo '</td>';
-            echo '<td><strong>'.$tipo_doc.'</strong></td>';
-            echo '<td class="right">'.price($obj->total_ht).'</td>';
-            echo '<td class="right">'.price($obj->total_tva).'</td>';
-            echo '<td class="right"><strong>'.price($obj->total_ttc).'</strong></td>';
-            echo '<td class="left" style="padding: 5px; line-height: 1.2;">'.$simulacion_puc.'</td>';
+            echo '<td><strong>' . htmlspecialchars($tipo_doc, ENT_QUOTES, 'UTF-8') . '</strong></td>';
+            echo '<td class="right">' . price($obj->total_ht) . '</td>';
+            echo '<td class="right">' . price($obj->total_tva) . '</td>';
+            echo '<td class="right"><strong>' . price($obj->total_ttc) . '</strong></td>';
+            echo '<td class="left" style="padding: 5px; line-height: 1.2;">' . $simulacion_puc . '</td>';
             echo '</tr>';
         }
         
         echo '</table>';
         echo '<br><div class="center">';
-        echo '<input type="submit" class="button button-primary" value="GENERAR ASIENTOS COLOMBIANOS AUTOMÁTICOS" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'POST\'; f.action=\'procesar_asiento.php\';">';
+        echo '<input type="submit" class="button button-primary" value="GENERAR ASIENTOS COLOMBIANOS AUTOMÁTICOS" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'POST\'; f.action=\'procesar_asiento.php\'; return true;">';
         echo '</div></form>';
     } else {
         echo '</table></form>';
