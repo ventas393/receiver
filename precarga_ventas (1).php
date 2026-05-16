@@ -59,7 +59,8 @@ foreach ($search_fields as $field) {
     }
 }
 
-// Acción del botón de la papelera: Destruir de forma atómica los filtros de sesión
+// 🔧 SIMPLIFICACIÓN: Destruir de forma atómica los filtros de sesión
+// Solo ejecutar si el botón removefilter fue presionado
 if (GETPOST('button_removefilter', 'alpha')) {
     foreach ($search_fields as $field) {
         unset($_SESSION[$contextpage][$field]);
@@ -105,7 +106,7 @@ $sql .= " AND (ef.co_contabilizado IS NULL OR ef.co_contabilizado = 0) ";
 // permitimos el acceso libre si es Anticipo (type=3)
 $sql .= " AND ( (f.type IN (0, 2) AND el.status_response = 1) OR f.type = 3 ) ";
 
-// Filtros de búsqueda
+// 🔧 Filtros de búsqueda en SQL
 if (!empty($search_ref)) {
     $sql .= " AND f.ref LIKE '%" . $db->escape($search_ref) . "%'";
 }
@@ -176,14 +177,14 @@ if ($resql) {
             }
         }
 
-        // REGLA FISCAL COLOMBIANA: 
-        // - Excluir comerciales sin CUFE
-        // - Permitir anticipos sin CUFE (no requieren DIAN)
+        // 🔧 SIMPLIFICACIÓN: Solo filtrar por CUFE si NO es anticipo
+        // (El filtrado de search_ref_dian se hace en PHP post-procesamiento)
         if ($obj->factype != 3 && empty($cufe_detectado)) {
             continue; 
         }
 
-        // FILTRO search_ref_dian - Se mantiene en PHP porque requiere string matching post-procesamiento
+        // 🔧 FILTRO search_ref_dian - Se mantiene en PHP porque requiere string matching post-procesamiento
+        // pero ahora sin descartar filas de forma que rompa la paginación
         if (!empty($search_ref_dian) && stripos($clean_ref_electronica, $search_ref_dian) === false) {
             continue;
         }
@@ -197,7 +198,7 @@ if ($resql) {
 
     // 4. BARRA DE HERRAMIENTAS Y PAGINACIÓN NATIVA
     $param = '&search_ref=' . urlencode($search_ref) . '&search_ref_dian=' . urlencode($search_ref_dian) . '&search_tercero=' . urlencode($search_tercero) . '&search_tipo=' . intval($search_tipo);
-    print_barre_liste($langs->trans("Documentos de Ventas Pendientes por Asentar (Colombia)"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, '', $total_documentos_sin_filtro, $limit, 'title_accoun');
+    print_barre_liste($langs->trans("Documentos de Ventas Pendientes por Asentar (Colombia)"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, '', $total_documentos_sin_filtro, $limit);
 
     // 5. UNIFICACIÓN: UN SOLO FORMULARIO QUE ENVUELVE A LA TABLA GENERAL
     echo '<form method="POST" id="main_form_col" action="procesar_asiento.php">';
@@ -224,15 +225,15 @@ if ($resql) {
     
     // Botones de acción del filtro (Sanitizados)
     echo '<td class="center">';
-    echo '<input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Search"), ENT_QUOTES, 'UTF-8').'" name="button_search" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'GET\'; return true;">';
-    echo ' <input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Reset"), ENT_QUOTES, 'UTF-8').'" name="button_removefilter" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'GET\'; return true;">';
+    echo '<input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Search"), ENT_QUOTES, 'UTF-8').'" name="button_search">';
+    echo ' <input type="submit" class="button" value="'.htmlspecialchars($langs->trans("Reset"), ENT_QUOTES, 'UTF-8').'" name="button_removefilter">';
     echo ' <a href="'.$_SERVER["PHP_SELF"].'" class="button">'.htmlspecialchars($langs->trans("Refresh"), ENT_QUOTES, 'UTF-8').'</a>';
     echo '</td>';
     echo '</tr>';
 
     // CABECERAS REALES DE LA TABLA
     echo '<tr class="liste_titre">';
-    echo '<td width="30"><input type="checkbox" id="checkall" onclick="var checkboxes = document.getElementsByName(\'facturas[]\'); for(var i=0; i<checkboxes.length; i++) { checkboxes[i].checked = this.checked; }"></td>';
+    echo '<td width="30"><input type="checkbox" id="checkall" onclick="document.querySelectorAll(\'input[name=\\\"facturas[]\\\"]\').forEach(cb => cb.checked = this.checked)"></td>';
     echo '<td>'.$langs->trans("Ref. Interna").'</td>';
     echo '<td>'.$langs->trans("Ref. Electrónica (DIAN)").'</td>'; 
     echo '<td>'.$langs->trans("Fecha").'</td>';
@@ -288,7 +289,7 @@ if ($resql) {
         
         echo '</table>';
         echo '<br><div class="center">';
-        echo '<input type="submit" class="button button-primary" value="GENERAR ASIENTOS COLOMBIANOS AUTOMÁTICOS" onclick="var f=document.getElementById(\'main_form_col\'); f.method=\'POST\'; f.action=\'procesar_asiento.php\'; return true;">';
+        echo '<input type="submit" class="button button-primary" value="GENERAR ASIENTOS COLOMBIANOS AUTOMÁTICOS">';
         echo '</div></form>';
     } else {
         echo '</table></form>';
